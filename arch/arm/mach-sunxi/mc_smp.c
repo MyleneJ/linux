@@ -73,6 +73,7 @@ static void __iomem *prcm_base;
 static void __iomem *sram_b_smp_base;
 
 extern void sunxi_mc_smp_secondary_startup(void);
+extern void sunxi_mc_smp_resume(void);
 
 static bool sunxi_core_is_cortex_a15(unsigned int core, unsigned int cluster)
 {
@@ -571,16 +572,6 @@ static bool __init sunxi_mc_smp_cpu_table_init(void)
  * We need the trampoline code to enable CCI-400 on the first cluster
  */
 typedef typeof(cpu_reset) phys_reset_t;
-
-static void __init __naked sunxi_mc_smp_resume(void)
-{
-	asm volatile(
-		"bl	sunxi_mc_smp_cluster_cache_enable\n"
-		"b	cpu_resume"
-		/* Let compiler know about sunxi_mc_smp_cluster_cache_enable */
-		:: "i" (sunxi_mc_smp_cluster_cache_enable)
-	);
-}
 
 static int __init nocache_trampoline(unsigned long __unused)
 {
