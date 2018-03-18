@@ -73,9 +73,34 @@ static void __iomem *cpucfg_base;
 static void __iomem *prcm_base;
 static void __iomem *sram_b_smp_base;
 
+/*
+ * This holds any device nodes that we requested resources for,
+ * so that we may easily release resources in the error path.
+ */
+struct sunxi_mc_smp_nodes {
+	struct device_node *prcm_node;
+	struct device_node *cpucfg_node;
+	struct device_node *sram_node;
+};
+
+/* This structure holds SoC-specific bits tied to an enable-method string. */
+struct sunxi_mc_smp_data {
+	const char *enable_method;
+	int (*get_smp_nodes)(struct sunxi_mc_smp_nodes *nodes);
+};
+
 extern void sunxi_mc_smp_secondary_startup(void);
 extern void sunxi_mc_smp_resume(void);
 extern void smp_init_cntvoff(void);
+
+static int __init sun9i_a80_get_smp_nodes(struct sunxi_mc_smp_nodes *nodes);
+
+static const struct sunxi_mc_smp_data sunxi_mc_smp_data[] __initconst = {
+	{
+		.enable_method	= "allwinner,sun9i-a80-smp",
+		.get_smp_nodes	= sun9i_a80_get_smp_nodes,
+	},
+};
 
 static bool sunxi_core_is_cortex_a15(unsigned int core, unsigned int cluster)
 {
@@ -612,22 +637,6 @@ static int __init sunxi_mc_smp_loopback(void)
 	return ret;
 }
 
-/*
- * This holds any device nodes that we requested resources for,
- * so that we may easily release resources in the error path.
- */
-struct sunxi_mc_smp_nodes {
-	struct device_node *prcm_node;
-	struct device_node *cpucfg_node;
-	struct device_node *sram_node;
-};
-
-/* This structure holds SoC-specific bits tied to an enable-method string. */
-struct sunxi_mc_smp_data {
-	const char *enable_method;
-	int (*get_smp_nodes)(struct sunxi_mc_smp_nodes *nodes);
-};
-
 static void __init sunxi_mc_smp_put_nodes(struct sunxi_mc_smp_nodes *nodes)
 {
 	of_node_put(nodes->prcm_node);
@@ -661,13 +670,6 @@ static int __init sun9i_a80_get_smp_nodes(struct sunxi_mc_smp_nodes *nodes)
 
 	return 0;
 }
-
-static const struct sunxi_mc_smp_data sunxi_mc_smp_data[] __initconst = {
-	{
-		.enable_method	= "allwinner,sun9i-a80-smp",
-		.get_smp_nodes	= sun9i_a80_get_smp_nodes,
-	},
-};
 
 static int __init sunxi_mc_smp_init(void)
 {
