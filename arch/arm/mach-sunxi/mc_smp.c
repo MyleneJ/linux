@@ -56,15 +56,23 @@
 #define CPUCFG_CX_RST_CTRL_L2_RST	BIT(8)
 #define CPUCFG_CX_RST_CTRL_CX_RST(n)	BIT(4 + (n))
 #define CPUCFG_CX_RST_CTRL_CORE_RST(n)	BIT(n)
+#define CPUCFG_CX_RST_CTRL_CORE_RST_ALL	(0xf << 0)
 
 #define PRCM_CPU_PO_RST_CTRL(c)		(0x4 + 0x4 * (c))
 #define PRCM_CPU_PO_RST_CTRL_CORE(n)	BIT(n)
 #define PRCM_CPU_PO_RST_CTRL_CORE_ALL	0xf
 #define PRCM_PWROFF_GATING_REG(c)	(0x100 + 0x4 * (c))
+/* The power off register for clusters are different from a80 and a83t */
+#define PRCM_PWROFF_GATING_REG_CLUSTER_SUN8I	BIT(0)
 #define PRCM_PWROFF_GATING_REG_CLUSTER_SUN9I	BIT(4)
 #define PRCM_PWROFF_GATING_REG_CORE(n)	BIT(n)
 #define PRCM_PWR_SWITCH_REG(c, cpu)	(0x140 + 0x10 * (c) + 0x4 * (cpu))
 #define PRCM_CPU_SOFT_ENTRY_REG		0x164
+
+/* R_CPUCFG registers, specific to SUN8I */
+#define R_CPUCFG_CLUSTER_PO_RST_CTRL(c)	(0x30 + (c) * 0x4)
+#define R_CPUCFG_CLUSTER_PO_RST_CTRL_CORE(n)	BIT(n)
+#define R_CPUCFG_CPU_SOFT_ENTRY_REG		0x01a4
 
 #define CPU0_SUPPORT_HOTPLUG_MAGIC0	0xFA50392F
 #define CPU0_SUPPORT_HOTPLUG_MAGIC1	0x790DCA3A
@@ -72,6 +80,7 @@
 static void __iomem *cpucfg_base;
 static void __iomem *prcm_base;
 static void __iomem *sram_b_smp_base;
+static void __iomem *r_cpucfg_base;
 static int index;
 
 /*
@@ -82,6 +91,7 @@ struct sunxi_mc_smp_nodes {
 	struct device_node *prcm_node;
 	struct device_node *cpucfg_node;
 	struct device_node *sram_node;
+	struct device_node *r_cpucfg_node;
 };
 
 /* This structure holds SoC-specific bits tied to an enable-method string. */
@@ -96,12 +106,18 @@ extern void sunxi_mc_smp_resume(void);
 extern void smp_init_cntvoff(void);
 
 static int __init sun9i_a80_get_smp_nodes(struct sunxi_mc_smp_nodes *nodes);
+static int __init sun8i_a83t_get_smp_nodes(struct sunxi_mc_smp_nodes *nodes);
 
 static const struct sunxi_mc_smp_data sunxi_mc_smp_data[] __initconst = {
 	{
 		.enable_method	= "allwinner,sun9i-a80-smp",
 		.get_smp_nodes	= sun9i_a80_get_smp_nodes,
 		.is_sun9i	= true,
+	},
+	{
+		.enable_method	= "allwinner,sun8i-a83t-smp",
+		.get_smp_nodes	= sun8i_a83t_get_smp_nodes,
+		.is_sun9i	= false,
 	},
 };
 
@@ -190,6 +206,16 @@ static int sunxi_cpu_powerup(unsigned int cpu, unsigned int cluster)
 	reg &= ~PRCM_CPU_PO_RST_CTRL_CORE(cpu);
 	writel(reg, prcm_base + PRCM_CPU_PO_RST_CTRL(cluster));
 
+	if (r_cpucfg_base) {
+		/* assert cpu power-on reset */
+		reg  = readl(r_cpucfg_base +
+			     R_CPUCFG_CLUSTER_PO_RST_CTRL(cluster));
+		reg &= ~(R_CPUCFG_CLUSTER_PO_RST_CTRL_CORE(cpu));
+		writel(reg, r_cpucfg_base +
+		       R_CPUCFG_CLUSTER_PO_RST_CTRL(cluster));
+		udelay(10);
+	}
+
 	/* Cortex-A7: hold L1 reset disable signal low */
 	if (!sunxi_core_is_cortex_a15(cpu, cluster)) {
 		reg = readl(cpucfg_base + CPUCFG_CX_CTRL_REG0(cluster));
@@ -213,16 +239,37 @@ static int sunxi_cpu_powerup(unsigned int cpu, unsigned int cluster)
 	/* open power switch */
 	sunxi_cpu_power_switch_set(cpu, cluster, true);
 
+	/* Handle A83T bit swap */
+	if (!sunxi_mc_smp_data[index].is_sun9i) {
+		if (cpu == 0)
+			cpu = 4;
+	}
+
 	/* clear processor power gate */
 	reg = readl(prcm_base + PRCM_PWROFF_GATING_REG(cluster));
 	reg &= ~PRCM_PWROFF_GATING_REG_CORE(cpu);
 	writel(reg, prcm_base + PRCM_PWROFF_GATING_REG(cluster));
 	udelay(20);
 
+	/* Handle A83T bit swap */
+	if (!sunxi_mc_smp_data[index].is_sun9i) {
+		if (cpu == 4)
+			cpu = 0;
+	}
+
 	/* de-assert processor power-on reset */
 	reg = readl(prcm_base + PRCM_CPU_PO_RST_CTRL(cluster));
 	reg |= PRCM_CPU_PO_RST_CTRL_CORE(cpu);
 	writel(reg, prcm_base + PRCM_CPU_PO_RST_CTRL(cluster));
+
+	if (r_cpucfg_base) {
+		reg  = readl(r_cpucfg_base +
+			     R_CPUCFG_CLUSTER_PO_RST_CTRL(cluster));
+		reg |= R_CPUCFG_CLUSTER_PO_RST_CTRL_CORE(cpu);
+		writel(reg, r_cpucfg_base +
+		       R_CPUCFG_CLUSTER_PO_RST_CTRL(cluster));
+		udelay(10);
+	}
 
 	/* de-assert all processor resets */
 	reg = readl(cpucfg_base + CPUCFG_CX_RST_CTRL(cluster));
@@ -245,6 +292,14 @@ static int sunxi_cluster_powerup(unsigned int cluster)
 	if (cluster >= SUNXI_NR_CLUSTERS)
 		return -EINVAL;
 
+	/* For A83T, assert cluster cores resets */
+	if (!sunxi_mc_smp_data[index].is_sun9i) {
+		reg = readl(cpucfg_base + CPUCFG_CX_RST_CTRL(cluster));
+		reg &= ~CPUCFG_CX_RST_CTRL_CORE_RST_ALL;   /* Core Reset    */
+		writel(reg, cpucfg_base + CPUCFG_CX_RST_CTRL(cluster));
+		udelay(10);
+	}
+
 	/* assert ACINACTM */
 	reg = readl(cpucfg_base + CPUCFG_CX_CTRL_REG1(cluster));
 	reg |= CPUCFG_CX_CTRL_REG1_ACINACTM;
@@ -254,6 +309,16 @@ static int sunxi_cluster_powerup(unsigned int cluster)
 	reg = readl(prcm_base + PRCM_CPU_PO_RST_CTRL(cluster));
 	reg &= ~PRCM_CPU_PO_RST_CTRL_CORE_ALL;
 	writel(reg, prcm_base + PRCM_CPU_PO_RST_CTRL(cluster));
+
+	/* assert cluster cores resets */
+	if (r_cpucfg_base) {
+		reg  = readl(r_cpucfg_base +
+			     R_CPUCFG_CLUSTER_PO_RST_CTRL(cluster));
+		reg &= ~CPUCFG_CX_RST_CTRL_CORE_RST_ALL;
+		writel(reg, r_cpucfg_base +
+		       R_CPUCFG_CLUSTER_PO_RST_CTRL(cluster));
+		udelay(10);
+	}
 
 	/* assert cluster resets */
 	reg = readl(cpucfg_base + CPUCFG_CX_RST_CTRL(cluster));
@@ -287,6 +352,8 @@ static int sunxi_cluster_powerup(unsigned int cluster)
 	reg = readl(prcm_base + PRCM_PWROFF_GATING_REG(cluster));
 	if (sunxi_mc_smp_data[index].is_sun9i)
 		reg &= ~PRCM_PWROFF_GATING_REG_CLUSTER_SUN9I;
+	else
+		reg &= ~PRCM_PWROFF_GATING_REG_CLUSTER_SUN8I;
 	writel(reg, prcm_base + PRCM_PWROFF_GATING_REG(cluster));
 	udelay(20);
 
@@ -485,6 +552,8 @@ static int sunxi_cluster_powerdown(unsigned int cluster)
 	reg = readl(prcm_base + PRCM_PWROFF_GATING_REG(cluster));
 	if (sunxi_mc_smp_data[index].is_sun9i)
 		reg |= PRCM_PWROFF_GATING_REG_CLUSTER_SUN9I;
+	else
+		reg |= PRCM_PWROFF_GATING_REG_CLUSTER_SUN8I;
 	writel(reg, prcm_base + PRCM_PWROFF_GATING_REG(cluster));
 	udelay(20);
 
@@ -566,8 +635,12 @@ out:
 	return !ret;
 }
 
-static bool sunxi_mc_smp_cpu_can_disable(unsigned int __unused)
+static bool sunxi_mc_smp_cpu_can_disable(unsigned int cpu)
 {
+	/* CPU0 hotplug handled only for sun9i-a80 */
+	if (!sunxi_mc_smp_data[index].is_sun9i)
+		if (cpu == 0)
+			return false;
 	return true;
 }
 #endif
@@ -647,6 +720,7 @@ static void __init sunxi_mc_smp_put_nodes(struct sunxi_mc_smp_nodes *nodes)
 	of_node_put(nodes->prcm_node);
 	of_node_put(nodes->cpucfg_node);
 	of_node_put(nodes->sram_node);
+	of_node_put(nodes->r_cpucfg_node);
 	memset(nodes, 0, sizeof(*nodes));
 }
 
@@ -670,6 +744,32 @@ static int __init sun9i_a80_get_smp_nodes(struct sunxi_mc_smp_nodes *nodes)
 						   "allwinner,sun9i-a80-smp-sram");
 	if (!nodes->sram_node) {
 		pr_err("%s: Secure SRAM not available\n", __func__);
+		return -ENODEV;
+	}
+
+	return 0;
+}
+
+static int __init sun8i_a83t_get_smp_nodes(struct sunxi_mc_smp_nodes *nodes)
+{
+	nodes->prcm_node = of_find_compatible_node(NULL, NULL,
+						   "allwinner,sun8i-a83t-r-ccu");
+	if (!nodes->prcm_node) {
+		pr_err("%s: PRCM not available\n", __func__);
+		return -ENODEV;
+	}
+
+	nodes->cpucfg_node = of_find_compatible_node(NULL, NULL,
+						     "allwinner,sun8i-a83t-cpucfg");
+	if (!nodes->cpucfg_node) {
+		pr_err("%s: CPUCFG not available\n", __func__);
+		return -ENODEV;
+	}
+
+	nodes->r_cpucfg_node = of_find_compatible_node(NULL, NULL,
+						       "allwinner,sun8i-a83t-r-cpucfg");
+	if (!nodes->r_cpucfg_node) {
+		pr_err("%s: RCPUCFG not available\n", __func__);
 		return -ENODEV;
 	}
 
@@ -756,6 +856,15 @@ static int __init sunxi_mc_smp_init(void)
 			pr_err("%s: failed to map secure SRAM\n", __func__);
 			goto err_unmap_release_cpucfg;
 		}
+	} else {
+		r_cpucfg_base = of_io_request_and_map(nodes.r_cpucfg_node,
+						      0, "sunxi-mc-smp");
+		if (IS_ERR(r_cpucfg_base)) {
+			ret = PTR_ERR(r_cpucfg_base);
+			pr_err("%s: failed to map R-CPUCFG registers\n",
+			       __func__);
+			goto err_unmap_release_cpucfg;
+		}
 	}
 
 	/* Configure CCI-400 for boot cluster */
@@ -763,7 +872,7 @@ static int __init sunxi_mc_smp_init(void)
 	if (ret) {
 		pr_err("%s: failed to configure boot cluster: %d\n",
 		       __func__, ret);
-		goto err_unmap_release_secure_sram;
+		goto err_unmap_release_sram_rcpucfg;
 	}
 
 	/* We don't need the device nodes anymore */
@@ -773,6 +882,9 @@ static int __init sunxi_mc_smp_init(void)
 	if (sunxi_mc_smp_data[index].is_sun9i)
 		writel(__pa_symbol(sunxi_mc_smp_secondary_startup),
 		       prcm_base + PRCM_CPU_SOFT_ENTRY_REG);
+	else
+		writel(__pa_symbol(sunxi_mc_smp_secondary_startup),
+		       r_cpucfg_base + R_CPUCFG_CPU_SOFT_ENTRY_REG);
 
 	/* Actually enable multi cluster SMP */
 	smp_set_ops(&sunxi_mc_smp_smp_ops);
@@ -781,10 +893,13 @@ static int __init sunxi_mc_smp_init(void)
 
 	return 0;
 
-err_unmap_release_secure_sram:
+err_unmap_release_sram_rcpucfg:
 	if (sunxi_mc_smp_data[index].is_sun9i) {
 		iounmap(sram_b_smp_base);
 		of_address_to_resource(nodes.sram_node, 0, &res);
+	} else {
+		iounmap(r_cpucfg_base);
+		of_address_to_resource(nodes.r_cpucfg_node, 0, &res);
 	}
 	release_mem_region(res.start, resource_size(&res));
 err_unmap_release_cpucfg:
