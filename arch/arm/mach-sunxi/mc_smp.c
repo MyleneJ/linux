@@ -72,6 +72,7 @@
 static void __iomem *cpucfg_base;
 static void __iomem *prcm_base;
 static void __iomem *sram_b_smp_base;
+static int index;
 
 /*
  * This holds any device nodes that we requested resources for,
@@ -87,6 +88,7 @@ struct sunxi_mc_smp_nodes {
 struct sunxi_mc_smp_data {
 	const char *enable_method;
 	int (*get_smp_nodes)(struct sunxi_mc_smp_nodes *nodes);
+	int is_sun9i;
 };
 
 extern void sunxi_mc_smp_secondary_startup(void);
@@ -99,6 +101,7 @@ static const struct sunxi_mc_smp_data sunxi_mc_smp_data[] __initconst = {
 	{
 		.enable_method	= "allwinner,sun9i-a80-smp",
 		.get_smp_nodes	= sun9i_a80_get_smp_nodes,
+		.is_sun9i	= true,
 	},
 };
 
@@ -282,7 +285,8 @@ static int sunxi_cluster_powerup(unsigned int cluster)
 
 	/* clear cluster power gate */
 	reg = readl(prcm_base + PRCM_PWROFF_GATING_REG(cluster));
-	reg &= ~PRCM_PWROFF_GATING_REG_CLUSTER_SUN9I;
+	if (sunxi_mc_smp_data[index].is_sun9i)
+		reg &= ~PRCM_PWROFF_GATING_REG_CLUSTER_SUN9I;
 	writel(reg, prcm_base + PRCM_PWROFF_GATING_REG(cluster));
 	udelay(20);
 
@@ -479,7 +483,8 @@ static int sunxi_cluster_powerdown(unsigned int cluster)
 	/* gate cluster power */
 	pr_debug("%s: gate cluster power\n", __func__);
 	reg = readl(prcm_base + PRCM_PWROFF_GATING_REG(cluster));
-	reg |= PRCM_PWROFF_GATING_REG_CLUSTER_SUN9I;
+	if (sunxi_mc_smp_data[index].is_sun9i)
+		reg |= PRCM_PWROFF_GATING_REG_CLUSTER_SUN9I;
 	writel(reg, prcm_base + PRCM_PWROFF_GATING_REG(cluster));
 	udelay(20);
 
@@ -701,6 +706,8 @@ static int __init sunxi_mc_smp_init(void)
 			break;
 	}
 
+	index = i;
+
 	of_node_put(node);
 	if (ret)
 		return -ENODEV;
@@ -741,12 +748,14 @@ static int __init sunxi_mc_smp_init(void)
 		goto err_unmap_prcm;
 	}
 
-	sram_b_smp_base = of_io_request_and_map(nodes.sram_node, 0,
-						"sunxi-mc-smp");
-	if (IS_ERR(sram_b_smp_base)) {
-		ret = PTR_ERR(sram_b_smp_base);
-		pr_err("%s: failed to map secure SRAM\n", __func__);
-		goto err_unmap_release_cpucfg;
+	if (sunxi_mc_smp_data[index].is_sun9i) {
+		sram_b_smp_base = of_io_request_and_map(nodes.sram_node, 0,
+							"sunxi-mc-smp");
+		if (IS_ERR(sram_b_smp_base)) {
+			ret = PTR_ERR(sram_b_smp_base);
+			pr_err("%s: failed to map secure SRAM\n", __func__);
+			goto err_unmap_release_cpucfg;
+		}
 	}
 
 	/* Configure CCI-400 for boot cluster */
@@ -761,8 +770,9 @@ static int __init sunxi_mc_smp_init(void)
 	sunxi_mc_smp_put_nodes(&nodes);
 
 	/* Set the hardware entry point address */
-	writel(__pa_symbol(sunxi_mc_smp_secondary_startup),
-	       prcm_base + PRCM_CPU_SOFT_ENTRY_REG);
+	if (sunxi_mc_smp_data[index].is_sun9i)
+		writel(__pa_symbol(sunxi_mc_smp_secondary_startup),
+		       prcm_base + PRCM_CPU_SOFT_ENTRY_REG);
 
 	/* Actually enable multi cluster SMP */
 	smp_set_ops(&sunxi_mc_smp_smp_ops);
@@ -772,8 +782,10 @@ static int __init sunxi_mc_smp_init(void)
 	return 0;
 
 err_unmap_release_secure_sram:
-	iounmap(sram_b_smp_base);
-	of_address_to_resource(nodes.sram_node, 0, &res);
+	if (sunxi_mc_smp_data[index].is_sun9i) {
+		iounmap(sram_b_smp_base);
+		of_address_to_resource(nodes.sram_node, 0, &res);
+	}
 	release_mem_region(res.start, resource_size(&res));
 err_unmap_release_cpucfg:
 	iounmap(cpucfg_base);
