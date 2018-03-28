@@ -26,6 +26,7 @@
 #include <asm/cp15.h>
 #include <asm/cputype.h>
 #include <asm/idmap.h>
+#include <asm/smp_cntvoff.h>
 #include <asm/smp_plat.h>
 #include <asm/suspend.h>
 
@@ -74,6 +75,7 @@ static void __iomem *sram_b_smp_base;
 
 extern void sunxi_mc_smp_secondary_startup(void);
 extern void sunxi_mc_smp_resume(void);
+extern void smp_init_cntvoff(void);
 
 static bool sunxi_core_is_cortex_a15(unsigned int core, unsigned int cluster)
 {
@@ -713,6 +715,9 @@ static int __init sunxi_mc_smp_init(void)
 	ret = sunxi_mc_smp_data[i].get_smp_nodes(&nodes);
 	if (ret)
 		goto err_put_nodes;
+
+	if (!sunxi_mc_smp_data[index].is_sun9i)
+		smp_init_cntvoff();
 
 	/*
 	 * Unfortunately we can not request the I/O region for the PRCM.
