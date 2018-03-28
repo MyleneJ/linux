@@ -18,6 +18,7 @@
 
 #ifdef CONFIG_SMP
 ENTRY(sunxi_mc_smp_cluster_cache_enable)
+	.arch	armv7-a
 	/*
 	 * Enable cluster-level coherency, in preparation for turning on the MMU.
 	 *
