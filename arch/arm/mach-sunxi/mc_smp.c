@@ -83,6 +83,7 @@ static void __iomem *sram_b_smp_base;
 static void __iomem *r_cpucfg_base;
 static int index;
 
+int sunxi_test;
 /*
  * This holds any device nodes that we requested resources for,
  * so that we may easily release resources in the error path.
@@ -824,9 +825,6 @@ static int __init sunxi_mc_smp_init(void)
 	ret = sunxi_mc_smp_data[i].get_smp_nodes(&nodes);
 	if (ret)
 		goto err_put_nodes;
-
-	if (!sunxi_mc_smp_data[index].is_sun9i)
-		smp_init_cntvoff();
 
 	/*
 	 * Unfortunately we can not request the I/O region for the PRCM.

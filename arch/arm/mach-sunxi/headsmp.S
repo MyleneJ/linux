@@ -30,7 +30,7 @@ ENTRY(sunxi_mc_smp_cluster_cache_enable)
 	movw	r2, #(ARM_CPU_PART_CORTEX_A15 & 0xffff)
 	movt	r2, #(ARM_CPU_PART_CORTEX_A15 >> 16)
 	cmp	r1, r2
-	bne	not_a15
+//	bne	not_a15
 
 	/* The following is Cortex-A15 specific */
 
@@ -54,7 +54,7 @@ ENTRY(sunxi_mc_smp_cluster_cache_enable)
 	mcr p15, 1, r1, c9, c0, 2
 
 	/* End of Cortex-A15 specific setup */
-	not_a15:
+//	not_a15:
 
 	/* Get value of sunxi_mc_smp_first_comer */
 	adr	r1, first
@@ -67,7 +67,7 @@ ENTRY(sunxi_mc_smp_cluster_cache_enable)
 	b	cci_enable_port_for_self
 
 	.align 2
-	first: .word sunxi_mc_smp_first_comer - .
+	first: .word sunxi_test - .
 ENDPROC(sunxi_mc_smp_cluster_cache_enable)
 
 ENTRY(sunxi_mc_smp_secondary_startup)
