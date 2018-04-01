@@ -12,9 +12,7 @@
 
 #include <linux/linkage.h>
 #include <asm/assembler.h>
-
-#define ARM_CPU_PART_MASK		0xff00fff0
-#define ARM_CPU_PART_CORTEX_A15	0x4100c0f0
+#include <asm/cputype_def.h>
 
 #ifdef CONFIG_SMP
 ENTRY(sunxi_mc_smp_cluster_cache_enable)
